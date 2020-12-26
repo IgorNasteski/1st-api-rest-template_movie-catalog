@@ -1,0 +1,215 @@
+DODAVANJE HYSTRIX FRAMEWORKA        SA YOUTUBE-A "Java Brains, SpringBoot Microservices Level 2 -   18 Problem with Hystrix proxy"
+
+KORISTI SE KADA NPR MOJ API/SERVIS KOMUNICIRA SA DRUGIM API-JEM/SERVISOM, PA DA SE OSIGURAM AKO SE DESI DA JE TAJ SERVIS/API PAO ILI NEDOSTUPAN PA
+NE DOBIJAM NIKAKAV RESPONSE. HYSTRIX U POZADINI GLEDA POSLENJIH 5 RESPONSA SA TOG SERVISA SA KOJIM KOMUNICIRAMO, I AKO SU 3 OD 5 ERROR ILI U TIMEOUT-U,
+UPALICEMO NPR 10 SEKUNDI DA UOPSTE NE KOMUNICIRAMO SA TIM SERVISOM
+NOTE: SVAKI API/SERVIS KOJI KOMUNICIRA SA NEKIM DRUGIM API-JEM/SERVISOM I AKO ZELI DA SE OSIGURA, MORA DA URADI ISTO
+
+1)Prvo dodajem starter u dependency
+        <dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-netflix-hystrix</artifactId>
+		</dependency>
+
+2)Dodajem anotaciju iznad naziv glavne/main klase
+    @EnableCircuitBreaker
+
+NOTE: U ovom trenutku mi imamo circuit breaker(hystrix) omogucen da ga koristimo, ostaje nam samo da zadamo komande koje ce da kazu sta kada treba da se uradi u slucaju
+      da neki servis/api nije dostupan i ne vraca nam response
+
+3)Dodajem anotaciju iznad naziva metoda u kojim se komunicira sa nekim api-jem/servisom, iznad metoda u kojima moze doci do "circuit breakers-a", anotacija je @HystrixCommand
+   primer: u ovom api-ju, komuniciramo sa drugim servisisima/api-ima u metodi
+
+       @RequestMapping("/{userId}")
+       @HystrixCommand(fallbackMethod = "getFallbackCatalog")
+       public List<CatalogItem> getCatalogItems(@PathVariable("userId")String userId){
+           RatingResponse ratings = restTemplate.getForObject("http://rating-data-service/ratings/users/" + userId, RatingResponse.class);
+           List<CatalogItem> catalogItems = new ArrayList<>();
+           for(Rating rating : ratings.getRatings()){
+               //For each movie ID, call movie info service and get details
+               Movie movie = restTemplate.getForObject("http://movie-info-service/movies/" + rating.getMovieId(), Movie.class);
+               //Put them all together
+               catalogItems.add(new CatalogItem(movie.getName(), movie.getDescription(), rating.getRating()));
+           }
+           return catalogItems;
+       }
+
+   SADA KREIRAM METODU KOJA CE DA ODRADI fallback, KOJA CE DA SE ODRADI I VRATI KORISNIKU UKOLIKO DODJE DO CIRCUIT BREAK-A, UKOLIKO SERVISI/API-JI SA KOJIMA KOMUNICIRAM
+   U OVOJ METODI NE BUDU RADILI IZ NEKOG RAZLOGA...
+
+       //ovaj metod sam morao da kreiram da ukoliko se upali hystrix, tj ukoliko dodje do "circuit break-a"(posto je metoda iznad anotirana sa @HystrixCommand(fallbackMethod = "getFallbackCatalog")
+       //to znaci da se u njoj komunicira sa drugim api-jem/servisima i ukoliko neki od tih servisa ne bude radio, ja kreiram istu metodu kao gore, samo promenim naziv iz
+       //"getCatalogItems" u "getFallbackCatalog" posto sam i "getFallbackCatalog" stavio u zagrade za fallbackMethod pa mora isto da pise i tu i u nazivu ove metode
+       //i ako dodje do "circuit break-a" tj ako servis koji kontaktiram ne radi ili nije dostupan, korisniku ce se vratiti ova metoda koju sam sad kreirao, koja ima
+       // isti potpis kao metoda iznad za koju radim ovo resenje, koju osiguravam. Bolje da mu se vrati neka hardcodirana lista, default-no objasnjen odgovor, nego nista ili
+       //error(jer je veoma losa opcija da namestim da se vrati error jer bih morao da uradim neki "throw", a on mora da se hendluje)
+
+       public List<CatalogItem> getFallbackCatalog(@PathVariable("userId")String userId){
+           return Arrays.asList(new CatalogItem("No movie", "", 0));
+       }
+
+    UKOLIKO DODJE DO OVOGA(DA SERVIS SA KOJIM KOMUNICIRAMO PREK REST TEMPLATE-A NE RADI), KORISNIKU CE SE VRATITI OVAJ ODGOVOR
+
+    {
+        name: "No movie",
+        desc: "",
+        rating: 0
+    }
+
+
+    !!!!!!!!!!!!!!! MORACU DA ODRADIM MALO BOLJE!!! POSTO OVA METODA U SEBI KOMUNICIRA SA 2 API-JA/SERVISA, I AKO JEDAN SERVIS RADI A DRUGI NE, NECEMO DA URADIMO FALLBACK
+    ZA OBA, HOCEMO DA POKUPIMO INFORMACIJE I PODATKE BAR OD TOG SERVISA KOJI RADI, A ONDA DA SE URADI FALLBACK ZA DRUGI SERVIS KOJI NE RADI. MORAM DA IH RAZDVOJIM.
+    OZNACIM restTemplate.getForObject("http://rating-data-service/ratings/users/" + userId, RatingResponse.class);, IDEM ctrl+alt+m ZADAM IME NOVE METODE SA OVIM ISTIM
+    POTPISOM "getUserRating" i dobicu novu metodu koja ce hendlovati jedan servis
+
+        private RatingResponse getUserRating(@PathVariable("userId") String userId) {
+            return restTemplate.getForObject("http://rating-data-service/ratings/users/" + userId, RatingResponse.class);
+        }
+
+    ISTO URADIM I ZA DRUGU KOMUNIKACIJU SA DRUGIM SERVISOM I DOBIJEM JOS JEDNU METODU SLICNU OVOJ:
+        private CatalogItem getCatalogItem(Rating rating) {
+            Movie movie = restTemplate.getForObject("http://movie-info-service/movies/" + rating.getMovieId(), Movie.class);
+            return new CatalogItem(movie.getName(), movie.getDescription(), rating.getRating());
+        }
+
+    A U GLAVNOJ METODI ZA KOJU RADIM OVO CE SE SADA PROMENITI STVARI I IZGLEDACE OVAKO:
+
+        @RequestMapping("/{userId}")
+        @HystrixCommand(fallbackMethod = "getFallbackCatalog")
+        public List<CatalogItem> getCatalogItems(@PathVariable("userId")String userId){
+            RatingResponse ratings = getUserRating(userId);
+
+            List<CatalogItem> catalogItems = new ArrayList<>();
+
+            for(Rating rating : ratings.getRatings()){
+                //For each movie ID, call movie info service and get details
+                catalogItems.add(getCatalogItem(rating));
+            }
+
+            return catalogItems;
+        }
+
+        MENJA SE OVAJ DEO
+
+        IZ  RatingResponse ratings = restTemplate.getForObject("http://rating-data-service/ratings/users/" + userId, RatingResponse.class);
+        U   RatingResponse ratings = getUserRating(userId);
+            I
+        IZ  Movie movie = restTemplate.getForObject("http://movie-info-service/movies/" + rating.getMovieId(), Movie.class);
+        U   catalogItems.add(getCatalogItem(rating));
+
+
+        POSTO SAM OBE KOMUNIKACIJE SA SPOLJNIM API-JIMA/SERVISIMA RAZBIO U 2 METODE I SVAKU OD NJIH HENDLOVAO(HARDKODIRAO ODGOVOR)
+        SADA MOGU DA SKINEM @HystrixCommand(fallbackMethod = "getFallbackCatalog") IZNAD NAZIVA GLAVNE METODE
+            public List<CatalogItem> getCatalogItems(@PathVariable("userId")String userId)
+        KOJU SAM HTEO DA HENDLUJEM JER SE U NJOJ NALAZI KOMUNIKACIJA SA 2 SPOLJNA API-JA
+
+
+        NOTE: MORAM DA REFAKTORISEM KOD, TJ DA OVE METODE KOJE KOMUNICIRAJU SA SPOLJNIM API-JIMA UBACIM U DRUGE ODVOJENE KLASE JER PROXY PAMTI U SVOJOJ CASH
+        MEMORIJI ODGOVORE KOJI SU SE VEC DESILI, PA ONDA NECE RADITI OVO AKO NE PREBACIM U DRUGE KLASE, JER KAD PREBACIM U DRUGE KLASE PROXY CE MORATI DA ODE
+        DO NJIH I POKUPI NOVE PRAVE VREDNOSTI
+        -SADA MORAM DA REFAKTORISEM KOD, OVE SVE METODE MORAM DA SMESTIM U POSEBNE @Service KLASE(DA BI MOGLE DA SE AUTOWIRE-UJU U KONTROLERU PA DA POZIVAM TE METODE
+        ODATLE). PRAVIM KLASU "MovieInfo" I U NJU UBACUJEM 2 METODE KOJE CE DA RADE KOMUNIKACIJU SA SPOLJNIM API-JEM I KOJE CE DA RADE FALLBACK.
+                 PRAVIM KLASU "UserRatingInfo" I U NJU UBACUJEM 2 METODE KOJE CE DA RADE KOMUNIKACIJU SA SPOLJNIM API-JEM I KOJE CE DA RADE FALLBACK.
+        ONDA IH @Autowire-ujem u kontroleru i menjam iz
+                RatingResponse ratings = getUserRating(userId);
+                u
+                RatingResponse ratings = userRatingInfo.getUserRating(userId);          -userRatingInfo je instanca service klase u koju sam smestio te 2 metode
+
+                kao i iz
+                catalogItems.add(getCatalogItem(rating));
+                u
+                catalogItems.add(movieInfo.getCatalogItem(rating));                     -movieInfo je instanca service klase u koju sam smestio te 2 metode
+
+        I SADA KADA POKRENEM SVE API-JE/SERVISE, I OKINEM ENDPOINT OVAJ KOJI KOMUNICIRA SA TA 2 API-JA, SVE CE RADITI. MOGU DA TESTIRAM, DA NAMERNO ISKLJUCIM JEDAN
+        SERVIS PA DA VIDIM STA CE DA SE DESI. ISKLJUCICU(STOPIRACU) "movie-info-service" I OPET CU DA OKINEM REQUEST OVOG ENDPOINTA I SADA CU DOBITI SAMO PODATKE
+        SERVISA KOJI RADE, A ZA OVAJ SERVIS "movie-info-service" CU SADA OKINUTI ONE 2 METODE JER SERVIS NE RADI I DOBICU ONAJ HARDKODIRANI ODGOVOR KOJI SAM NAPISAO
+        I DOBICU OVAKAV ODGOVOR
+
+        {
+            name: "Movie name not found",
+            desc: "",
+            rating: 3
+        },
+        {
+            name: "Movie name not found",
+            desc: "",
+            rating: 4
+        }
+        ZNACI, ODLICNO RESENJE - ZA ONAJ SERVIS KOJI NE RADI, VRACAM HARDKODIRAN RESPONSE(HARDKODIRANE PODATKE) A ZA ONAJ KOJI RADI, SVE PO PROTOKOLU, VRACAM ONE PRAVE PODATKE
+        OVO JE INACE DOBRA PRAKSA DA SE U KONTROLERU NE GOMILA KOD, DA SE RAZBIJE I REFAKTORISE U MANJE METODE ILI U NEKE DRUGE KLASE UGLAVNOM VRV @Service
+
+
+4)Konfigurisem ponasanje Hystrix-a(sta hocu da se desi kada dodje do toga)
+Ovo setujem/dodajem u onoj prvoj metodi koja komunicira sa spoljnim api-jem, sad ce izgledati ovako
+    @HystrixCommand(fallbackMethod = "getFallbackUserRating",
+            commandProperties = {
+                    @HystrixProperty(name = "execution.isolation.thread.timeoutInMilliseconds", value = "2000"),
+                    @HystrixProperty(name = "circuitBreaker.requestVolumeThreshold", value = "5"),
+                    @HystrixProperty(name = "circuitBreaker.errorThresholdPercentage", value = "50"),
+                    @HystrixProperty(name = "circuitBreaker.sleepWindowInMilliseconds", value = "5000")
+            })
+    public RatingResponse getUserRating(@PathVariable("userId") String userId) {
+        return restTemplate.getForObject("http://rating-data-service/ratings/users/" + userId, RatingResponse.class);
+    }
+
+    CEKAJ OVOLIKO SEKUNDI, AKO SE ODGOVOR NE DESI - UPALI TIMEOUT.
+        @HystrixProperty(name = "execution.isolation.thread.timeoutInMilliseconds", value = "2000")
+    POGLEDAJ ZADNJIH 5 REQUESTA SA TOG SPOLJNOG SERVISA/API-JA, AKO JE OD POSLEDNJIH 5 BAR 3 ERRORA ILI NEMA ODGOVORA, ODRADI OVO
+        @HystrixProperty(name = "circuitBreaker.requestVolumeThreshold", value = "5")
+    OVO JE DODATAK NA OVO IZNAD, POSTO SAM STAVIO VREDNOST 50, TO ZNACI DA OD ONOG BROJA POSLEDNJIH REQUESTA KOJE SAM REKAO DA PRATI(5), AKO JE 50% OD NJIH ERROR ILI NEMA ODGOVORA, ODRADI OVO
+        @HystrixProperty(name = "circuitBreaker.errorThresholdPercentage", value = "50")
+    KONACNO, KAD MOJ API VIDI DA NE RADI TAJ API/SERVIS, JA MU KAZEM CEKAJ 5 SEKUNDI(SPAVAJ I NE KOMUNICIRAJ SA NJIM) PA ONDA MOZES DA PROBAS OPET KOMUNIKACIJU
+        @HystrixProperty(name = "circuitBreaker.sleepWindowInMilliseconds", value = "5000")
+
+
+        OVO SE ZOVE BULKHEAD PATTERN
+    ZA DRUGU METODU MOGU DODATI OVAKO(MOZE VRV NA OBE DA SE DODA, KAZEM DA SE ODVOJI POSEBNO BROJ THREADOVA ZA KOMUNIKACIJU SA JEDNIM SPOLJNIM API-JEM, A POSEBNO
+    SA DRUGIM BROJ THREADOVA DA SE NAPRAVI, TAKO DA NE UTICU JEDAN NA DRUGI, AKO JEDAN API NE RADI, NECE TROSITI ZAJEDNICKE THREADOVE, NEGO SVAKA IMA SVOJU
+        @HystrixCommand(fallbackMethod = "getFallbackCatalogItem",
+        threadPoolKey = "movieInfoPool",                                -DODATAK
+        threadPoolProperties = {                                        -DODATAK
+                @HystrixProperty(name = "coreSize", value = "20"),      -DODATAK
+                @HystrixProperty(name = "maxQueueSize", value = "10")   -DODATAK
+        })
+        public CatalogItem getCatalogItem(Rating rating) {
+            Movie movie = restTemplate.getForObject("http://movie-info-service/movies/" + rating.getMovieId(), Movie.class);
+            return new CatalogItem(movie.getName(), movie.getDescription(), rating.getRating());
+        }
+
+
+
+
+
+
+NOTE: POSTOJI JOS JEDNA ZANIMLJIVA STVAR I KORISNA KOJU MOGU DA URADIM, A TO JE DA DODAM "Hystrix Dashboard" - VIZUELNU SLIKU SVIH PODATAKA I ONOGA STO SE DESAVA
+VRV KOLIKO JE REQUESTOVA BILO KA SPOLJNIM SERVISIMA, DA LI SU BILI DOBRI ILI NE, DA LI SE CEKAO I KOLIKO TIMEOUT...
+-Prvo dodajem u pom.xml dva dependency-ja
+        <dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-netflix-hystrix-dashboard</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+
+-U main/glavnoj klasi "MovieCatalogServiceApplication" iznad naziva klase dodam
+        @EnableHystrixDashboard
+
+-U application.properties fajlu dodam
+#bez dodavanja ovog hystrix dashboard nece da radi
+        management.endpoints.web.exposure.include=hystrix.stream
+
+
+!!!!!!! TO JE TO, SAD IDEM NA
+            http://localhost:8081/hystrix
+        u serach baru uneo
+            https://localhost:8081/actuator/hystrix.stream
+        a u novoj kartici okidao nekoliko puta ovaj reqeust
+            http://localhost:8081/movieCatalog/foo
+        i kad se vratim na karticu   http://localhost:8081/hystrix  kliknem dugme "Monitor stream" i otvorice mi se kao statistika(hystrix dashboard)
+
+NIJE HTELO DA RADI, MORAO DA IZMENIM U POM FAJLU IZ
+        <spring-cloud.version>Greenwich.RELEASE</spring-cloud.version>
+        U
+        <spring-cloud.version>Hoxton.SR3</spring-cloud.version>

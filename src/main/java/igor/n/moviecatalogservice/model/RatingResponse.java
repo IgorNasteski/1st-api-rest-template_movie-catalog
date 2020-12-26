@@ -4,14 +4,22 @@ import java.util.List;
 
 public class RatingResponse {
 
+    private String id;
     private List<Rating> ratings;
 
     public RatingResponse(){}
 
-    public RatingResponse(List<Rating> ratings) {
+    public RatingResponse(String id, List<Rating> ratings) {
+        this.id = id;
         this.ratings = ratings;
     }
 
+    public String getId() {
+        return id;
+    }
+    public void setId(String id) {
+        this.id = id;
+    }
     public List<Rating> getRatings() {
         return ratings;
     }

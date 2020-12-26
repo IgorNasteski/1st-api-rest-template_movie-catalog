@@ -1,0 +1,35 @@
+OVDE SAM ZAPISAO KAKO FUNKCIONISU NEKE STVARI, KAO I DODATNE INFORMACIJE - proveriti i ostale api-je koji komuniciraju sa ovim api-jem, i tamo ima dokumentacije/objasnjenja
+
+
+1)ADDING TIMEOUT TO REST TEMPLATE
+
+Posto ovaj API ('movie-catalog-service') komunicira sa ostala 2 API-ja, zato ovom servisu/api-ju moramo da setujemo timeout jer ako se desi da neki
+od servisa ne bude radio kako treba(ili ne bude radio uopste iz nekog razloga), a mi imamo odredjen broj thread-ova(niti) koji mogu da hendluju svaki
+request od korisnika koje pokusavaju da udju na razne endpointe nase aplikacije(pa jos ako ne bude radio neki server sa kojim komunicira ovaj api,
+nagomilace se thread-ovi, jos ako idu refresh to je sve x2 sa nagomilavanjem thread-ova i onda cemo zauzeti maximum broj thread-ova i app ce puci).
+I onda, da bi sprecili da dodje do zauzimanja maximum broja thread-ova koji hendluju requestove od korisnika, mi cemo setovati TIMEOUT REST TEMPLATE-U.
+Onda, kada nas thread ne bude mogao da izvrsi request za neki od endpointa koji dolazi od usera(zato sto neki api/servis koji gadjamo ne radi), posle
+nekog vremena ce se desiti TIMEOUT i bacice mu error, a thread ce se osloboditi i tako cemo pomoci da se ne iskoriste svi threadov-i pa da pukne app.
+NOTE: SVAKI SERVIS/API KOJI KOMUNICIRA SA DRUGIM SERVISOM/API-JEM MORA DA IMA SETOVAN REST TEMPLATE REQUEST TIMEOUT DA BI SE IZBEGAO OVAJ SCENARIO.
+
+OVO SETUJEM U MAIN/GLAVNOJ KLASI:
+-Prvo i prvo, da bih komunicirao sa external ili nekim mojim drugim api-jem koji sam kreirao, moram da kreiram @Bean tj primerak RestTemplate-a.
+ To radim u glavnoj/main klasi(u ovom slucaju se zove "MovieCatalogServiceApplication". Napravim ga ovako:
+
+    @Bean
+ 	@LoadBalanced           -vezano za EUREKA SERVER. Vrv dodajem da bi ovaj api mogao biti otkriven u EUREKA SERVERU. Objasnjeno u dokuemntaciji api-ja "movie-info-service"
+ 	public RestTemplate restTemplate(){
+ 		return new RestTemplate();
+ 	}
+
+ i sada ce svaki moj kontroler u ovom api-ju moci da korsiti RestTemplate, dovoljno je da ga samo @Autowire-uje.
+-DA BIH SADA DODAO TIMEOUT RestTemplate-u koji sam kreirao u primeru iznad, moram da napravim u telu ove metode instancu klase koja setuje timeout
+ i da je prosledim u konstruktor kada vracam "new RestTemplate(OVDE)". PRIMER:
+
+    @Bean
+	@LoadBalanced
+	public RestTemplate restTemplate(){
+		HttpComponentsClientHttpRequestFactory clientHttpRequestFactory = new HttpComponentsClientHttpRequestFactory();
+		clientHttpRequestFactory.setConnectTimeout(3000);       -TIMEOUT ce biti 3 sekunde(ako user zatrazi request za neki nas endpoint a ne dobije odgovor, bacamo error)
+		return new RestTemplate(clientHttpRequestFactory);                                  a ako dobije response od nas(ili nekih api-ja sa kojim komunicira taj api nas)
+	}                                                                                       u roku od 3 sekunde, onda nista, sve je ok
